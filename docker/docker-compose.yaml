@@ -1,0 +1,225 @@
+services:
+
+  # =========================================================
+  # 1. KAFKA CONTROLLER
+  # =========================================================
+
+  controller:
+    image: apache/kafka:4.3.1
+    container_name: kafka-controller
+
+    ports:
+      - "9093:9093"
+
+    environment:
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: controller
+
+      KAFKA_LISTENERS: CONTROLLER://:9093
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT
+
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@controller:9093
+
+      KAFKA_LOG_DIRS: /var/lib/kafka/data
+
+    volumes:
+      - controller-data:/var/lib/kafka/data
+
+
+  # =========================================================
+  # 2. KAFKA BROKER 1
+  # =========================================================
+
+  broker1:
+    image: apache/kafka:4.3.1
+    container_name: kafka-broker1
+
+    depends_on:
+      - controller
+
+    ports:
+      - "9092:9092"
+
+    environment:
+      KAFKA_NODE_ID: 2
+      KAFKA_PROCESS_ROLES: broker
+
+      KAFKA_LISTENERS: INTERNAL://:29092,EXTERNAL://:9092
+
+      KAFKA_ADVERTISED_LISTENERS: INTERNAL://broker1:29092,EXTERNAL://localhost:9092
+
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,INTERNAL:PLAINTEXT,EXTERNAL:PLAINTEXT
+
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@controller:9093
+
+      KAFKA_INTER_BROKER_LISTENER_NAME: INTERNAL
+
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 2
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 2
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_DEFAULT_REPLICATION_FACTOR: 2
+
+      KAFKA_LOG_DIRS: /var/lib/kafka/data
+
+    volumes:
+      - broker1-data:/var/lib/kafka/data
+
+
+  # =========================================================
+  # 3. KAFKA BROKER 2
+  # =========================================================
+
+  broker2:
+    image: apache/kafka:4.3.1
+    container_name: kafka-broker2
+
+    depends_on:
+      - controller
+
+    ports:
+      - "9192:9192"
+
+    environment:
+      KAFKA_NODE_ID: 3
+      KAFKA_PROCESS_ROLES: broker
+
+      KAFKA_LISTENERS: INTERNAL://:29092,EXTERNAL://:9192
+
+      KAFKA_ADVERTISED_LISTENERS: INTERNAL://broker2:29092,EXTERNAL://localhost:9192
+
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,INTERNAL:PLAINTEXT,EXTERNAL:PLAINTEXT
+
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@controller:9093
+
+      KAFKA_INTER_BROKER_LISTENER_NAME: INTERNAL
+
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 2
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 2
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_DEFAULT_REPLICATION_FACTOR: 2
+
+      KAFKA_LOG_DIRS: /var/lib/kafka/data
+
+    volumes:
+      - broker2-data:/var/lib/kafka/data
+
+
+  # =========================================================
+  # 4. POSTGRES
+  # =========================================================
+
+  postgres-raw:
+    image: postgres:17
+    container_name: postgres-raw
+
+    environment:
+      POSTGRES_DB: api_traffic
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+
+    ports:
+      - "5432:5432"
+
+    volumes:
+      - raw-postgres-data:/var/lib/postgresql/data
+
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d api_traffic"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+
+  # =========================================================
+  # 5. PRODUCER
+  # =========================================================
+
+  producer:
+    build:
+      context: ../api-traffic-producer
+      dockerfile: Dockerfile
+
+    container_name: traffic-producer
+
+    ports:
+      - "8081:8081"
+
+    environment:
+      SPRING_KAFKA_BOOTSTRAP_SERVERS: broker1:29092,broker2:29092
+
+    depends_on:
+      broker1:
+        condition: service_started
+      broker2:
+        condition: service_started
+
+
+  # =========================================================
+  # 6. CONSUMER
+  # =========================================================
+
+  consumer:
+    build:
+      context: ../api_traffic_consumer
+      dockerfile: Dockerfile
+
+    container_name: traffic-consumer
+
+    ports:
+      - "8080:8080"
+
+    environment:
+      SPRING_KAFKA_BOOTSTRAP_SERVERS: broker1:29092,broker2:29092
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres-raw:5432/api_traffic
+
+    depends_on:
+      broker1:
+        condition: service_started
+      broker2:
+        condition: service_started
+      postgres-raw:
+        condition: service_healthy
+
+
+  # =========================================================
+  # 7. ANALYTICS
+  # =========================================================
+
+  analytics:
+    build:
+      context: ../api-traffic-analytics
+      dockerfile: Dockerfile
+
+    container_name: traffic-analytics
+
+    ports:
+      - "8083:8083"
+
+    environment:
+      SPRING_KAFKA_STREAMS_BOOTSTRAP_SERVERS: broker1:29092,broker2:29092
+
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres-raw:5432/api_traffic
+      SPRING_DATASOURCE_USERNAME: postgres
+      SPRING_DATASOURCE_PASSWORD: postgres
+
+    depends_on:
+      broker1:
+        condition: service_started
+      broker2:
+        condition: service_started
+      postgres-raw:
+        condition: service_healthy
+
+
+# =========================================================
+# VOLUMES
+# =========================================================
+
+volumes:
+  controller-data:
+  broker1-data:
+  broker2-data:
+  raw-postgres-data:
